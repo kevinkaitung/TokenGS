@@ -33,35 +33,159 @@ from tokengs.data.datafield import (
 )
 
 
+class _ZipSceneSource:
+    """Reads scene payload paths (``"<clip>/transforms.json"``) out of a zip."""
+
+    def __init__(self, path):
+        self._zip = zipfile.ZipFile(path, "r")
+        self._names = None
+
+    def open(self, name):
+        return self._zip.open(name, "r")
+
+    def exists(self, name):
+        if self._names is None:
+            self._names = set(self._zip.namelist())
+        return name in self._names
+
+    def close(self):
+        self._zip.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+
+
+class _DirSceneSource:
+    """Same interface as :class:`_ZipSceneSource` for an unpacked scene folder.
+
+    Names are resolved against the scene folder's *parent*, so the very same
+    ``f"{clip_name}/..."`` strings used for zips work unchanged.
+    """
+
+    def __init__(self, path):
+        self._base = Path(path).parent
+
+    def open(self, name):
+        return open(self._base / name, "rb")
+
+    def exists(self, name):
+        return (self._base / name).exists()
+
+    def close(self):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+
+
+def _scene_key(path) -> str:
+    """Scene hash / name for either a ``<hash>.zip`` or a ``<hash>/`` folder."""
+    p = Path(path)
+    return p.stem if p.suffix.lower() == ".zip" else p.name
+
+
+def _is_scene_dir(path) -> bool:
+    p = Path(path)
+    return p.is_dir() and (
+        (p / "transforms.json").exists()
+        or (p / "gaussian_splat" / "transforms.json").exists()
+    )
+
+
+def _open_scene_source(path):
+    if str(path).lower().endswith(".zip"):
+        return _ZipSceneSource(path)
+    return _DirSceneSource(path)
+
+
 class DL3DV10K:
-    def __init__(self, root_path, subset = ['1K', '2K', '3K', '4K', '5K', '6K', '7K', '8K', '9K', '10K', '11K'], resolution = '960p', load_depth=False, **kwargs):
+    def __init__(
+        self,
+        root_path,
+        subset=['1K', '2K', '3K', '4K', '5K', '6K', '7K', '8K', '9K', '10K', '11K'],
+        resolution='960p',
+        load_depth=False,
+        scene_format: str = 'auto',
+        **kwargs,
+    ):
         """
         data_format: support different formats for what different code base expect
+
+        ``scene_format`` selects how each scene is stored under ``root_path``:
+        ``'zip'`` for the packed DL3DV dumps (``<hash>.zip``), ``'folder'`` for
+        unpacked scene directories (``<hash>/transforms.json`` or
+        ``<hash>/gaussian_splat/transforms.json``, e.g. the CQ500 renders), or
+        ``'auto'`` (default) to pick up both. Both layouts are read through the
+        same code path, so everything below applies to either one.
         """
         super().__init__(**kwargs)
+        if scene_format not in ('auto', 'zip', 'folder'):
+            raise ValueError(
+                f"scene_format must be 'auto', 'zip' or 'folder', got {scene_format!r}"
+            )
         self.root_path = root_path
         self.subset = subset
         self.load_depth = load_depth
+        self.scene_format = scene_format
 
         self.sample_list = []
         for sub in self.subset:
-            if sub == '140':
-                cur_sample_list = sorted(glob.glob(f"{root_path}/*.zip"))
-            else:
-                cur_sample_list = sorted(glob.glob(f"{root_path}/{sub}/*.zip"))
-            self.sample_list.extend(cur_sample_list)
+            search_dir = root_path if sub == '140' else f"{root_path}/{sub}"
+            self.sample_list.extend(self._discover_scenes(search_dir))
 
         if resolution == '960p':
-            self.resolution = [540, 960]
+            # self.resolution = [540, 960]
+            # self.resolution = [600, 600]
+            self.resolution = [256, 256]
             self.image_folder = 'images_4'
         elif resolution == '960p_images':
             # For training dataset that uses 'images' folder instead of 'images_4'
-            self.resolution = [540, 960]
+            # self.resolution = [540, 960]
+            # self.resolution = [600, 600]
+            self.resolution = [256, 256]
             self.image_folder = 'images'
         else:
             raise NotImplementedError(f"Resolution {resolution} not supported")
         
         self.is_static = True
+
+    def _discover_scenes(self, search_dir) -> List[str]:
+        """List the scene zips and/or scene folders directly under ``search_dir``."""
+        scenes: List[str] = []
+        if self.scene_format in ('auto', 'zip'):
+            scenes.extend(glob.glob(f"{search_dir}/*.zip"))
+        if self.scene_format in ('auto', 'folder'):
+            scenes.extend(p for p in glob.glob(f"{search_dir}/*") if _is_scene_dir(p))
+        return sorted(scenes)
+
+    def _open_scene(self, idx):
+        """Open scene ``idx`` and return ``(clip_name, source)``.
+
+        ``clip_name`` is the prefix every payload path is under: the scene key
+        itself, or ``"<key>/gaussian_splat"`` for the DL3DV-140 / CQ500 layout.
+        """
+        path = self.sample_list[idx]
+        source = _open_scene_source(path)
+        key = _scene_key(path)
+        try:
+            for clip_name in (f"{key}/gaussian_splat", key):
+                if source.exists(f"{clip_name}/transforms.json"):
+                    return clip_name, source
+        except Exception:
+            source.close()
+            raise
+        # Nothing matched (e.g. a zip we cannot cheaply introspect): fall back
+        # to the historical subset-driven rule and let the open below fail.
+        # From original implementation of official TokenGS repo.
+        if self.subset == ['140']:
+            return f"{key}/gaussian_splat", source
+        return key, source
 
     def __len__(self):
         return len(self.sample_list)
@@ -87,16 +211,10 @@ class DL3DV10K:
         return intrinsics
 
     def load_video_reader(self, idx):
-        zip_path = self.sample_list[idx]
-        zip_handle = zipfile.ZipFile(zip_path, "r")
-
-        clip_name = Path(zip_path).stem
-
-        if self.subset == ['140']:
-            clip_name = f"{clip_name}/gaussian_splat"
+        clip_name, scene_source = self._open_scene(idx)
 
         # load json data
-        with zip_handle.open(f"{clip_name}/transforms.json", "r") as f:
+        with scene_source.open(f"{clip_name}/transforms.json") as f:
             json_data = json.load(f)
 
         # load video length
@@ -106,7 +224,7 @@ class DL3DV10K:
         intrinsics = self.load_intrinsics(json_data, resolution = self.resolution)
         transform_matrix_all = self.load_cameras(json_data)
 
-        return clip_name, video_length, intrinsics, transform_matrix_all, zip_handle, json_data
+        return clip_name, video_length, intrinsics, transform_matrix_all, scene_source, json_data
 
     def load_cameras(self, data_dict):
         transform_matrix_all = []
@@ -123,13 +241,10 @@ class DL3DV10K:
         return 1
     
     def count_frames(self, idx):
-        zip_path = self.sample_list[idx]
-        with zipfile.ZipFile(zip_path, "r") as zip_handle:
-            clip_name = Path(zip_path).stem
-            if self.subset == ['140']:
-                clip_name = f"{clip_name}/gaussian_splat"
+        clip_name, scene_source = self._open_scene(idx)
+        with scene_source:
             # load json data
-            with zip_handle.open(f"{clip_name}/transforms.json", "r") as f:
+            with scene_source.open(f"{clip_name}/transforms.json") as f:
                 json_data = json.load(f)
             total_frames = len(json_data['frames'])
 
@@ -146,7 +261,7 @@ class DL3DV10K:
     ):
         assert camera_convention == "opencv"
 
-        clip_name, total_frames, intrinsics, transform_matrices, zip_handle, json_data = self.load_video_reader(idx)
+        clip_name, total_frames, intrinsics, transform_matrices, scene_source, json_data = self.load_video_reader(idx)
         if frame_indices is None:
             frame_indices = range(total_frames)
 
@@ -157,7 +272,7 @@ class DL3DV10K:
         img_seq = []
         for frame_idx in frame_indices:
             img_name = json_data['frames'][frame_idx]['file_path'].split('/')[-1]
-            with zip_handle.open(f"{clip_name}/{self.image_folder}/{img_name}", "r") as f:
+            with scene_source.open(f"{clip_name}/{self.image_folder}/{img_name}") as f:
                 img = Image.open(BytesIO(f.read()))
                 img_seq.append(np.array(img))
         img_seq = np.stack(img_seq, axis=0) # n h w c
@@ -179,7 +294,7 @@ class DL3DV10K:
                 output_dict[data_field] = intrinsics
             elif data_field == DF_DEPTH and self.load_depth:
                 depth_seq = self._load_depth_seq(
-                    clip_name, json_data, zip_handle, frame_indices, num_depth_frames
+                    clip_name, json_data, scene_source, frame_indices, num_depth_frames
                 )
                 output_dict[data_field] = torch.from_numpy(depth_seq).float().unsqueeze(1)
 
@@ -190,7 +305,7 @@ class DL3DV10K:
         self,
         clip_name,
         json_data,
-        zip_handle,
+        scene_source,
         frame_indices,
         num_depth_frames: Optional[int],
     ) -> np.ndarray:
@@ -199,7 +314,7 @@ class DL3DV10K:
         for i, frame_idx in enumerate(frame_indices):
             if i < n_load:
                 depth_path = f"{clip_name}/{json_data['frames'][frame_idx]['depth_path']}"
-                with zip_handle.open(depth_path, "r") as f:
+                with scene_source.open(depth_path) as f:
                     depth = np.load(BytesIO(f.read()))
             else:
                 depth = np.zeros(self.resolution, dtype=np.float64)
@@ -208,27 +323,38 @@ class DL3DV10K:
 
 
 class DL3DVEval(DL3DV10K):
-    def __init__(self, root_path, evaluation_json, subset = ['1K', '2K', '3K', '4K', '5K', '6K', '7K', '8K', '9K', '10K', '11K'], resolution = '960p', num_input=16, load_depth=False):
-        super().__init__(root_path, subset, resolution, load_depth=load_depth)
+    def __init__(self, root_path, evaluation_json, subset = ['1K', '2K', '3K', '4K', '5K', '6K', '7K', '8K', '9K', '10K', '11K'], resolution = '960p', num_input=16, load_depth=False, scene_format: str = 'auto'):
+        super().__init__(root_path, subset, resolution, load_depth=load_depth, scene_format=scene_format)
 
         self.evaluation_indices = json.load(open(evaluation_json, "r"))
         self.sample_list = []
         for k in self.evaluation_indices:
-            if isinstance(k, str):
-                self.sample_list.append(os.path.join(root_path, k+'.zip'))
-            else:
-                self.sample_list.append(os.path.join(root_path, k['scene_name']+'.zip'))
+            scene_name = k if isinstance(k, str) else k['scene_name']
+            self.sample_list.append(self._resolve_scene_path(root_path, scene_name))
         
         self.is_static = True
 
         self.num_input = num_input
         self._colmap_points_cache: Dict[str, Tuple[np.ndarray, List[frozenset]]] = {}
 
+    def _resolve_scene_path(self, root_path, scene_name: str) -> str:
+        """Path of an eval scene, as a zip or as an unpacked folder."""
+        zip_path = os.path.join(root_path, scene_name + '.zip')
+        dir_path = os.path.join(root_path, scene_name)
+        if self.scene_format == 'zip':
+            return zip_path
+        if self.scene_format == 'folder':
+            return dir_path
+        if not os.path.exists(zip_path) and os.path.isdir(dir_path):
+            return dir_path
+        # Keep the zip path when neither exists so the error names the zip.
+        return zip_path
+
     def _read_points3d_bin(
-        self, zip_handle: zipfile.ZipFile, clip_name: str
+        self, scene_source, clip_name: str
     ) -> Tuple[np.ndarray, List[frozenset]]:
         path = f"{clip_name}/sparse/0/points3D.bin"
-        with zip_handle.open(path, "r") as f:
+        with scene_source.open(path) as f:
             data = f.read()
 
         off = 0
@@ -248,12 +374,12 @@ class DL3DVEval(DL3DV10K):
         return xyz, image_id_sets
 
     def _get_colmap_points(
-        self, zip_handle: zipfile.ZipFile, clip_name: str
+        self, scene_source, clip_name: str
     ) -> Tuple[np.ndarray, List[frozenset]]:
         cached = self._colmap_points_cache.get(clip_name)
         if cached is not None:
             return cached
-        cached = self._read_points3d_bin(zip_handle, clip_name)
+        cached = self._read_points3d_bin(scene_source, clip_name)
         self._colmap_points_cache[clip_name] = cached
         return cached
 
@@ -275,11 +401,11 @@ class DL3DVEval(DL3DV10K):
         self,
         clip_name,
         json_data,
-        zip_handle,
+        scene_source,
         frame_indices,
         num_depth_frames: Optional[int],
     ) -> np.ndarray:
-        xyz_all, image_id_sets = self._get_colmap_points(zip_handle, clip_name)
+        xyz_all, image_id_sets = self._get_colmap_points(scene_source, clip_name)
         world_transform = self._colmap_world_to_final_world_transform(json_data)
 
         intrinsics = self.load_intrinsics(json_data, resolution=self.resolution)
@@ -337,7 +463,7 @@ class DL3DVEval(DL3DV10K):
 
     def get_context_target_frames(self, idx):
         if isinstance(self.evaluation_indices, dict):
-            scene_name = Path(self.sample_list[idx]).stem
+            scene_name = _scene_key(self.sample_list[idx])
             eval_data = self.evaluation_indices[scene_name]
             context_frames = eval_data["context"]
             target_frames = eval_data["target"]
