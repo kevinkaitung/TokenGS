@@ -14,6 +14,7 @@
 # limitations under the License.
 
 import json
+import re
 import struct
 import zipfile
 from typing import Dict, List, Optional, Tuple
@@ -145,6 +146,12 @@ class DL3DV10K:
         elif resolution == '960p_images':
             # For training dataset that uses 'images' folder instead of 'images_4'
             self.resolution = [540, 960]
+            self.image_folder = 'images'
+        # for my volume rendered image dataset; allow passing any resolution of images
+        elif match := re.fullmatch(r"(\d+)x(\d+)", resolution):
+            # Custom datasets: "<H>x<W>" is the real image resolution
+            # (e.g. "256x256"), with images stored under the 'images' folder
+            self.resolution = [int(match.group(1)), int(match.group(2))]
             self.image_folder = 'images'
         else:
             raise NotImplementedError(f"Resolution {resolution} not supported")
