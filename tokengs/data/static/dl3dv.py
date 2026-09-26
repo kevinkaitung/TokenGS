@@ -140,15 +140,11 @@ class DL3DV10K:
             self.sample_list.extend(self._discover_scenes(search_dir))
 
         if resolution == '960p':
-            # self.resolution = [540, 960]
-            # self.resolution = [600, 600]
-            self.resolution = [256, 256]
+            self.resolution = [540, 960]
             self.image_folder = 'images_4'
         elif resolution == '960p_images':
             # For training dataset that uses 'images' folder instead of 'images_4'
-            # self.resolution = [540, 960]
-            # self.resolution = [600, 600]
-            self.resolution = [256, 256]
+            self.resolution = [540, 960]
             self.image_folder = 'images'
         else:
             raise NotImplementedError(f"Resolution {resolution} not supported")
