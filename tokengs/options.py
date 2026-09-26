@@ -175,6 +175,17 @@ config_defaults["train_dl3dv_base"] = Options(
     pct_start_steps=2000,
 )
 
+# added for volume experiments
+config_doc["train_volume_base"] = "Volume training defaults (long schedule, capped iters/epoch)."
+config_defaults["train_volume_base"] = Options(
+    # select proper scene/volume scale factor for each volumetric dataset
+    data_mode=(("volume_scaled_0.001", 1),),
+    num_epochs=300,
+    max_iters_per_epoch=500,    # this config is different than my previous run (didn't cap iters)
+    pct_start_steps=2000,
+    # previous run would set use_input_supervision=True
+)
+
 config_doc["finetune_dl3dv_2view"] = "Short finetune from existing tokens, 2 input views, wide images."
 config_defaults["finetune_dl3dv_2view"] = config_defaults["train_dl3dv_base"].evolve(
     num_epochs=20,
@@ -184,6 +195,18 @@ config_defaults["finetune_dl3dv_2view"] = config_defaults["train_dl3dv_base"].ev
     init_tokens_from_existing=True,
     num_input_views=2,
     img_size=(256, 448),
+)
+
+config_doc["finetune_volume_6view"] = "Short finetune from existing tokens, 6 input views, wide images."
+config_defaults["finetune_volume_6view"] = config_defaults["train_volume_base"].evolve(
+    num_epochs=20,
+    pct_start_steps=400,
+    lr=4e-5,
+    num_gs_tokens=4096,
+    init_tokens_from_existing=True,
+    num_input_views=6,
+    num_views=10,
+    img_size=(256, 256),
 )
 
 config_doc["finetune_dl3dv_4view"] = "Like finetune_dl3dv_2view with 4 input views."
