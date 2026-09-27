@@ -364,6 +364,25 @@ for _num_input_views in (2, 4, 6):
     ).evolve(**_LPIPS_LOSS)
 
 
+# ----- Volume latent-bottleneck finetune (added for volume experiments) -----
+config_doc["finetune_volume_latent_6view_ssim"] = (
+    "Finetune the released latent-bottleneck DL3DV 6-view SSIM model on volume data."
+)
+config_defaults["finetune_volume_latent_6view_ssim"] = config_defaults["train_volume_base"].evolve(
+    num_epochs=20,
+    pct_start_steps=400,
+    lr=4e-5,
+    num_gs_tokens=4096,
+    init_tokens_from_existing=True,
+    init_latents_from_existing=True,
+    num_input_views=6,
+    num_views=10,
+    img_size=(256, 256),
+    **_LATENT_D12_ARCH,
+    **_SSIM_LOSS,
+)
+
+
 # ----- Kubric 4D dynamic finetune -----
 config_doc["finetune_dl3dv_kubric_dyn"] = (
     "Dynamic finetune of the DL3DV base on Kubric4D. Adds dynamic GS tokens "
