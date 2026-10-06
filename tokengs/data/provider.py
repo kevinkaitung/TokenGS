@@ -23,6 +23,12 @@ import inspect
 from tokengs.utils.data import ImageTransform, ray_condition, timestep_embedding
 from tokengs.options import Options
 from tokengs.data.registry import dataset_registry
+from tokengs.data.view_sampling import (
+    directions_from_c2ws,
+    direction_signature,
+    kmeans_unit,
+    labels_to_members,
+)
 from tokengs.utils.augmentation import random_reflect
 from tokengs.data.datafield import (
     DF_CAMERA_C2W_TRANSFORM,
@@ -76,6 +82,11 @@ class Provider(Dataset):
 
         self.rng = np.random.default_rng(self.opt.seed)
         self.generator = torch.Generator(device='cpu').manual_seed(self.opt.seed)
+
+        # --- "even" view-sampling caches (per-Provider; forked workers each own
+        # theirs, populated lazily on first access; keys survive across epochs).
+        self._even_dirs_cache: dict[int, np.ndarray] = {}          # idx -> (N,3) unit dirs
+        self._even_input_clusters: dict[bytes, list] = {}          # signature -> cluster members
 
         self._setup_image_transforms(
             sample_size=self.opt.img_size,
@@ -281,6 +292,9 @@ class Provider(Dataset):
     def _get_indices_static(self, idx):
         rng = self.get_rng(idx)
 
+        if self.opt.view_sampling == "even":
+            return self._even_sample_indices(idx, rng)
+
         total_num_frames = self.dataset.count_frames(idx)
         assert total_num_frames >= max(self.opt.num_input_views, self.opt.num_views - self.opt.num_input_views), f'Frame number {total_num_frames} is smaller than number of input views {max(self.opt.num_input_views, self.opt.num_views - self.opt.num_input_views)}.'
         context_gap = rng.integers(self.min_gap, self.max_gap + 1)
@@ -293,6 +307,66 @@ class Provider(Dataset):
         # append to frame indices
         frame_indices = np.concatenate([frame_indices, target_index])
         
+        return frame_indices, []
+
+    def _even_get_dirs(self, idx):
+        """Unit view-directions for scene ``idx`` (cached per Provider/worker).
+
+        Loads the scene's c2ws once via the dataset's ``load_video_reader`` and
+        derives sphere directions; subsequent visits (num_repeat, re-shuffles,
+        later epochs) hit the cache. ``N`` comes from the loaded c2ws, so this
+        replaces the ``count_frames`` open that the random branch performs.
+        """
+        dirs = self._even_dirs_cache.get(idx)
+        if dirs is None:
+            # load_video_reader -> (clip_name, video_length, intrinsics, c2ws,
+            # scene_source, json_data); it leaves the scene source (zip handle
+            # or scene folder) open, so close it.
+            _, _, _, c2ws, scene_source, _ = self.dataset.load_video_reader(idx)
+            try:
+                scene_source.close()
+            except Exception:
+                pass
+            dirs = directions_from_c2ws(np.asarray(c2ws))
+            self._even_dirs_cache[idx] = dirs
+        return dirs
+
+    def _even_sample_indices(self, idx, rng):
+        """k-means-region even sampling: input and target views each roughly
+        cover the viewpoint sphere, are disjoint, and vary per iteration.
+
+        Bypasses the min_gap/max_gap windowing (meaningless on spatially
+        scrambled frame indices). Clusters are seeded by ``opt.seed`` (stable
+        across epochs/workers); the per-cluster pick uses ``rng`` (per-epoch,
+        advances each item) so the selected views vary while coverage holds.
+        """
+        dirs = self._even_get_dirs(idx)
+        N = dirs.shape[0]
+        k_in = self.opt.num_input_views
+        k_tgt = self.opt.num_views - self.opt.num_input_views
+        assert N >= self.opt.num_views, (
+            f"even sampling needs N({N}) >= num_views({self.opt.num_views}) "
+            f"for disjoint input+target on scene {idx}"
+        )
+        assert k_in >= 1
+
+        # inputs: cluster ALL dirs -> k_in regions (cached), one random pick each
+        sig = direction_signature(dirs, k_in)
+        members = self._even_input_clusters.get(sig)
+        if members is None:
+            members = labels_to_members(kmeans_unit(dirs, k_in, seed=self.opt.seed), k_in)
+            self._even_input_clusters[sig] = members
+        inputs = np.array([int(rng.choice(m)) for m in members], dtype=np.int64)
+
+        if k_tgt <= 0:
+            return inputs, []
+
+        # targets: cluster the LEFTOVER -> k_tgt regions (disjoint from inputs)
+        leftover = np.setdiff1d(np.arange(N), inputs)
+        tgt_members = labels_to_members(kmeans_unit(dirs[leftover], k_tgt, seed=self.opt.seed), k_tgt)
+        targets = np.array([int(rng.choice(leftover[m])) for m in tgt_members], dtype=np.int64)
+
+        frame_indices = np.concatenate([inputs, targets])  # inputs first, then targets
         return frame_indices, []
 
     def _get_indices_eval(self, idx):

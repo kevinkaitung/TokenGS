@@ -77,6 +77,12 @@ class Options:
     pointmap_trim_hi: float = 1.0
     num_workers: int = 16
     dataset_kwargs: dict[str, str] | None = None
+    # Input/target view sampling for STATIC datasets. "random": existing windowed/gap
+    # sampling. "even": k-means-region coverage of the viewpoint sphere with a fresh
+    # random pick per cluster each iteration (roughly even sphere coverage for both
+    # input and target views, varied per step). Only affects training; eval uses
+    # predefined context/target indices.
+    view_sampling: Literal["random", "even"] = "random"
 
     # --- training
     batch_size: int = 8
