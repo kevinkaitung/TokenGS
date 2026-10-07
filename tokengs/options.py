@@ -388,6 +388,24 @@ config_defaults["finetune_volume_latent_6view_ssim"] = config_defaults["train_vo
     **_SSIM_LOSS,
 )
 
+# ----- Volume latent-bottleneck Evaluation -----
+config_doc["eval_volume_latent_6view_ssim"] = "Volume eval preset: 6 views, eval JSON, single batch."
+config_defaults["eval_volume_latent_6view_ssim"] = Options(
+    data_mode=(("volume_eval_scaled_0.001", 1),),
+    dataset_kwargs={"evaluation_json": "assets/9.30.nyx.infer.exps/evaluation_idx_volume_3axis_align_6v.json"},
+    num_input_views=6,
+    img_size=(256, 256),
+    evaluating=True,
+    num_gs_tokens=4096,
+    use_input_supervision=False,
+    # NOTE: not sure how to use it, but the quality actually gets worse
+    # ttt_mode="scene-latent-tuning",
+    # ttt_lr=1e-2,
+    batch_size=1,
+    **_LATENT_D12_ARCH,
+    **_SSIM_LOSS,
+)
+
 
 # ----- Kubric 4D dynamic finetune -----
 config_doc["finetune_dl3dv_kubric_dyn"] = (
