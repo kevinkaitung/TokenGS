@@ -80,9 +80,10 @@ class Options:
     # Input/target view sampling for STATIC datasets. "random": existing windowed/gap
     # sampling. "even": k-means-region coverage of the viewpoint sphere with a fresh
     # random pick per cluster each iteration (roughly even sphere coverage for both
-    # input and target views, varied per step). Only affects training; eval uses
-    # predefined context/target indices.
-    view_sampling: Literal["random", "even"] = "random"
+    # input and target views, varied per step). "uniform": num_views distinct frames
+    # drawn uniformly at random from the whole scene (inputs and targets disjoint).
+    # Only affects training; eval uses predefined context/target indices.
+    view_sampling: Literal["random", "even", "uniform"] = "random"
 
     # --- training
     batch_size: int = 8

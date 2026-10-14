@@ -295,6 +295,9 @@ class Provider(Dataset):
         if self.opt.view_sampling == "even":
             return self._even_sample_indices(idx, rng)
 
+        if self.opt.view_sampling == "uniform":
+            return self._uniform_sample_indices(idx, rng)
+
         total_num_frames = self.dataset.count_frames(idx)
         assert total_num_frames >= max(self.opt.num_input_views, self.opt.num_views - self.opt.num_input_views), f'Frame number {total_num_frames} is smaller than number of input views {max(self.opt.num_input_views, self.opt.num_views - self.opt.num_input_views)}.'
         context_gap = rng.integers(self.min_gap, self.max_gap + 1)
@@ -367,6 +370,19 @@ class Provider(Dataset):
         targets = np.array([int(rng.choice(leftover[m])) for m in tgt_members], dtype=np.int64)
 
         frame_indices = np.concatenate([inputs, targets])  # inputs first, then targets
+        return frame_indices, []
+
+    def _uniform_sample_indices(self, idx, rng):
+        """Fully random sampling: ``num_views`` distinct frames drawn uniformly
+        from the whole scene, ignoring frame order and min_gap/max_gap. The first
+        ``num_input_views`` are inputs, the rest targets, so they never overlap.
+        """
+        total_num_frames = self.dataset.count_frames(idx)
+        assert total_num_frames >= self.opt.num_views, (
+            f"uniform sampling needs N({total_num_frames}) >= num_views({self.opt.num_views}) "
+            f"for disjoint input+target on scene {idx}"
+        )
+        frame_indices = rng.choice(total_num_frames, size=self.opt.num_views, replace=False)
         return frame_indices, []
 
     def _get_indices_eval(self, idx):
