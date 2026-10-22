@@ -31,7 +31,7 @@ from safetensors.torch import load_file
 from tqdm import tqdm
 
 from tokengs.data import get_multi_dataloader
-from tokengs.models import model_registry
+from tokengs.models import model_registry, split_data
 from tokengs.options import AllConfigs, Options
 from tokengs.utils import MetricsCalculator, MetricsTracker
 from tokengs.utils.images import save_image_grid_square, visualize_depth
@@ -129,6 +129,36 @@ def _cuda_sync() -> None:
         torch.cuda.synchronize()
 
 
+def _reconstruct_and_render_timed(base_model, model_input, opt):
+    """Reconstruct Gaussians, then render target views one at a time.
+
+    Times are cumulative from the start of reconstruction: Gaussians ready,
+    first target view rendered, last target view rendered.
+    """
+    _cuda_sync()
+    t0 = time.perf_counter()
+    if opt.use_ttt_for_eval:
+        gaussians = base_model.forward_ttt(model_input, n_steps=opt.ttt_n_steps, lr=opt.ttt_lr)
+        reconstruction = base_model._reconstruction_from_gaussians(gaussians)
+    else:
+        reconstruction = base_model.forward_reconstruction(model_input)
+    _cuda_sync()
+    times = {"recon_time": time.perf_counter() - t0}
+
+    view_renders = []
+    for v in range(model_input.decoder.cam_view.shape[1]):
+        decoder_v = model_input.decoder.select_batch(slice(None), v)
+        view_renders.append(base_model.render_reconstruction(reconstruction, decoder_v))
+        if v == 0:
+            _cuda_sync()
+            times["view1_time"] = time.perf_counter() - t0
+    _cuda_sync()
+    times["viewN_time"] = time.perf_counter() - t0
+
+    renders = {k: torch.cat([r[k] for r in view_renders], dim=1) for k in view_renders[0]}
+    return reconstruction, renders, times
+
+
 def _views_chw_to_uint8_nhwc(views: torch.Tensor) -> np.ndarray:
     """(V, C, H, W) float in ~[0, 1] -> (V, H, W, C) uint8."""
     x = views.detach().cpu().numpy().transpose(0, 2, 3, 1)
@@ -178,16 +208,17 @@ def main() -> None:
     pbar = tqdm(test_dataloader, disable=not accelerator.is_main_process)
     with torch.no_grad(), pbar:
         for i, data in enumerate(pbar):
-            _cuda_sync()
-            t0 = time.perf_counter()
-            results = model(data)
-            _cuda_sync()
-            inference_time = time.perf_counter() - t0
+            model_input, _ = split_data(data, opt)
+            # base_model bypasses the autocast that accelerate wraps around model.forward
+            with accelerator.autocast():
+                if i == 0:  # warmup (CUDA context, kernel autotune); result discarded
+                    _reconstruct_and_render_timed(base_model, model_input, opt)
+                reconstruction, results, times = _reconstruct_and_render_timed(base_model, model_input, opt)
 
             input_images = data["images_input"]
             pred_images = results["images_pred"]
             gt_images = data["images_output"]
-            gaussians = results["gaussians"]
+            gaussians = reconstruction.gaussians
             masks = data["masks_output"]
             has_mask = data["has_mask"]
             depth_maps = results.get("depths_pred")
@@ -196,7 +227,7 @@ def main() -> None:
             metrics = metrics_calc.calculate_all_metrics(
                 pred_images, gt_images, reduction="mean", **mask_kw
             )
-            metrics["inference_time"] = inference_time
+            metrics.update(times)
 
             gathered = accelerator.gather(
                 {k: torch.tensor(v, device=accelerator.device) for k, v in metrics.items()}
