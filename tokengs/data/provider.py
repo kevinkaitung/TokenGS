@@ -13,6 +13,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from pathlib import Path
+
 import numpy as np
 import torch
 from torch.utils.data.dataset import Dataset
@@ -496,7 +498,12 @@ class Provider(Dataset):
 
         rgbs, masks, depths, c2ws, intrinsics, timesteps = _curate_batch_fn(all_rgbs, all_masks, all_depths, all_c2ws, all_intrinsics, torch.from_numpy(frame_indices).float())
 
-        return self._preprocess(rgbs, masks, depths, c2ws, intrinsics, timesteps, has_mask)
+        results = self._preprocess(rgbs, masks, depths, c2ws, intrinsics, timesteps, has_mask)
+        if hasattr(self.dataset, 'get_context_target_frames'):
+            # scene name of the sample actually loaded (__getitem__ may have retried another idx)
+            scene_path = Path(self.dataset.sample_list[idx])
+            results['scene_name'] = scene_path.stem if scene_path.suffix.lower() == '.zip' else scene_path.name
+        return results
 
     def __getitem__(self, idx):
         while True:

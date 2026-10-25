@@ -35,6 +35,7 @@ from tokengs.models import model_registry, split_data
 from tokengs.options import AllConfigs, Options
 from tokengs.utils import MetricsCalculator, MetricsTracker
 from tokengs.utils.images import save_image_grid_square, visualize_depth
+from tokengs.utils.views import save_views
 
 warnings.filterwarnings("ignore")
 
@@ -198,7 +199,7 @@ def main() -> None:
     ws = opt.workspace
     os.makedirs(ws, exist_ok=True)
     if opt.eval_n_media_dumps > 0:
-        for sub in ("images", "videos", "gaussians", "depths"):
+        for sub in ("images", "views", "videos", "gaussians", "depths"):
             os.makedirs(os.path.join(ws, sub), exist_ok=True)
 
     metrics_calc = MetricsCalculator(device=accelerator.device)
@@ -258,6 +259,15 @@ def main() -> None:
                     )
                     save_image_grid_square(pred_vis[b_idx], os.path.join(ws, "images", f"pred_{tag}.png"))
                     save_image_grid_square(gt_vis[b_idx], os.path.join(ws, "images", f"gt_{tag}.png"))
+
+                    # per-view images (no mask overlay), same layout as exps/eval_insitunet.py / eval_3dgs.py:
+                    # target_JJ = JSON target list position JJ == eval_view_JJ == 3DGS test/r_0JJ
+                    views_dir = os.path.join(ws, "views", data["scene_name"][b_idx])
+                    n_targets = pred_images.shape[1]
+                    save_views(pred_images[b_idx], views_dir, [f"target_{j:02d}_pred" for j in range(n_targets)])
+                    save_views(gt_images[b_idx], views_dir, [f"target_{j:02d}_gt" for j in range(n_targets)])
+                    save_views(input_images[b_idx], views_dir,
+                               [f"context_{k}" for k in range(input_images.shape[1])])
 
                     if depth_maps is not None:
                         depth_vis = visualize_depth(depth_maps[b_idx])
