@@ -391,6 +391,24 @@ config_defaults["finetune_volume_latent_6view_ssim"] = config_defaults["train_vo
     **_SSIM_LOSS,
 )
 
+# ----- Volume latent-bottleneck finetune (added for volume experiments) using LPIPS as auxiliary loss -----
+config_doc["finetune_volume_latent_6view_lpips"] = (
+    "Finetune the released latent-bottleneck DL3DV 6-view LPIPS model on volume data."
+)
+config_defaults["finetune_volume_latent_6view_lpips"] = config_defaults["train_volume_base"].evolve(
+    num_epochs=20,
+    pct_start_steps=400,
+    lr=4e-5,
+    num_gs_tokens=4096,
+    init_tokens_from_existing=True,
+    init_latents_from_existing=True,
+    num_input_views=6,
+    num_views=10,
+    img_size=(256, 256),
+    **_LATENT_D12_ARCH,
+    **_LPIPS_LOSS,
+)
+
 # ----- Volume latent-bottleneck Evaluation -----
 config_doc["eval_volume_latent_6view_ssim"] = "Volume eval preset: 6 views, eval JSON, single batch."
 config_defaults["eval_volume_latent_6view_ssim"] = Options(
@@ -407,6 +425,24 @@ config_defaults["eval_volume_latent_6view_ssim"] = Options(
     batch_size=1,
     **_LATENT_D12_ARCH,
     **_SSIM_LOSS,
+)
+
+# ----- Volume latent-bottleneck Evaluation using LPIPS as auxiliary loss -----
+config_doc["eval_volume_latent_6view_lpips"] = "Volume eval preset: 6 views, eval JSON, single batch."
+config_defaults["eval_volume_latent_6view_lpips"] = Options(
+    data_mode=(("volume_eval_scaled_0.001", 1),),
+    dataset_kwargs={"evaluation_json": "assets/9.30.nyx.infer.exps/evaluation_idx_volume_3axis_align_6v.json"},
+    num_input_views=6,
+    img_size=(256, 256),
+    evaluating=True,
+    num_gs_tokens=4096,
+    use_input_supervision=False,
+    # NOTE: not sure how to use it, but the quality actually gets worse
+    # ttt_mode="scene-latent-tuning",
+    # ttt_lr=1e-2,
+    batch_size=1,
+    **_LATENT_D12_ARCH,
+    **_LPIPS_LOSS,
 )
 
 
