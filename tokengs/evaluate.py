@@ -199,7 +199,12 @@ def main() -> None:
     ws = opt.workspace
     os.makedirs(ws, exist_ok=True)
     if opt.eval_n_media_dumps > 0:
-        for sub in ("images", "views", "videos", "gaussians", "depths"):
+        subs = ["images", "views", "depths"]
+        if opt.eval_dump_videos:
+            subs.append("videos")
+        if opt.eval_dump_ply:
+            subs.append("gaussians")
+        for sub in subs:
             os.makedirs(os.path.join(ws, sub), exist_ok=True)
 
     metrics_calc = MetricsCalculator(device=accelerator.device)
@@ -274,28 +279,31 @@ def main() -> None:
                         save_image_grid_square(
                             depth_vis, os.path.join(ws, "depths", f"depth_{tag}.png")
                         )
-                        depth_u8 = _views_chw_to_uint8_nhwc(depth_vis)
-                        imageio.mimwrite(
-                            os.path.join(ws, "videos", f"depth_{tag}.mp4"), depth_u8, fps=30
+                        if opt.eval_dump_videos:
+                            depth_u8 = _views_chw_to_uint8_nhwc(depth_vis)
+                            imageio.mimwrite(
+                                os.path.join(ws, "videos", f"depth_{tag}.mp4"), depth_u8, fps=30
+                            )
+
+                    if opt.eval_dump_videos:
+                        pred_u8 = _views_chw_to_uint8_nhwc(pred_vis[b_idx])
+                        input_u8 = _views_chw_to_uint8_nhwc(input_vis[b_idx])
+                        gt_u8 = _views_chw_to_uint8_nhwc(gt_vis[b_idx])
+                        combined = np.concatenate([gt_u8, pred_u8], axis=-2)
+
+                        for name, arr in (
+                            ("comparison", combined),
+                            ("pred", pred_u8),
+                            ("gt", gt_u8),
+                            ("input", input_u8),
+                        ):
+                            imageio.mimwrite(os.path.join(ws, "videos", f"{name}_{tag}.mp4"), arr, fps=30)
+
+                    if opt.eval_dump_ply:
+                        base_model.gs.save_ply(
+                            gaussians[b_idx : b_idx + 1],
+                            os.path.join(ws, "gaussians", f"gaussians_{tag}.ply"),
                         )
-
-                    pred_u8 = _views_chw_to_uint8_nhwc(pred_vis[b_idx])
-                    input_u8 = _views_chw_to_uint8_nhwc(input_vis[b_idx])
-                    gt_u8 = _views_chw_to_uint8_nhwc(gt_vis[b_idx])
-                    combined = np.concatenate([gt_u8, pred_u8], axis=-2)
-
-                    for name, arr in (
-                        ("comparison", combined),
-                        ("pred", pred_u8),
-                        ("gt", gt_u8),
-                        ("input", input_u8),
-                    ):
-                        imageio.mimwrite(os.path.join(ws, "videos", f"{name}_{tag}.mp4"), arr, fps=30)
-
-                    base_model.gs.save_ply(
-                        gaussians[b_idx : b_idx + 1],
-                        os.path.join(ws, "gaussians", f"gaussians_{tag}.ply"),
-                    )
 
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()

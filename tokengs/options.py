@@ -121,6 +121,8 @@ class Options:
 
     # --- evaluation
     eval_n_media_dumps: int = 0
+    eval_dump_videos: bool = True  # per media dump: comparison/pred/gt/input (+ depth) .mp4 videos
+    eval_dump_ply: bool = True  # per media dump: the predicted Gaussians as .ply
     strict_checkpoint_loading: bool = True
 
     # --- test-time training (eval)
