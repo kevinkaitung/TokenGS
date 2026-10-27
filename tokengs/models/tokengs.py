@@ -142,6 +142,14 @@ class TokenGS(nn.Module):
                 del state_dict[k]
         return state_dict
 
+    def train(self, mode: bool = True):
+        super().train(mode)
+        # Keep LPIPS frozen in eval mode: its lin layers contain Dropout, which would make the
+        # loss stochastic and raises inside torch.vmap (default randomness="error").
+        if self.lpips_loss is not None:
+            self.lpips_loss.eval()
+        return self
+
     def _background_color(self, dtype: torch.dtype, device: torch.device) -> torch.Tensor:
         if self.opt.bg_color == "white":
             return torch.ones(3, dtype=dtype, device=device)
