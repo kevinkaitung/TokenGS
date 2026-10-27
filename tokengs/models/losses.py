@@ -88,11 +88,14 @@ def compute_loss_from_renders(
 
     lambda_lpips = float(opt.lambda_lpips)
     if lambda_lpips > 0 and lpips_loss is not None:
-        loss_lpips = lpips_loss(
-            gt_images_lpips.view(-1, 3, H, W),
-            pred_images.view(-1, 3, H, W),
-            normalize=True,
-        ).mean()
+        # Run LPIPS in fp32 with autocast off: under torch.vmap, bf16 autocast casts the
+        # conv input but not the fp32 VGG bias, raising a dtype mismatch in F.conv2d.
+        with torch.autocast("cuda", enabled=False):
+            loss_lpips = lpips_loss(
+                gt_images_lpips.view(-1, 3, H, W).float(),
+                pred_images.view(-1, 3, H, W).float(),
+                normalize=True,
+            ).mean()
         results["loss_lpips"] = loss_lpips
 
     results["loss"] = loss
