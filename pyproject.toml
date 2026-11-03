@@ -23,7 +23,7 @@ dependencies = [
     "tqdm",
     "plyfile",
     "tensorboard",
-    "wandb==0.17.5",
+    "wandb==0.31.0",
     "torch==2.7.0",
     "torchvision",
     "gsplat==1.5.3",
