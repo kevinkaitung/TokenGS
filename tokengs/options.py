@@ -287,6 +287,22 @@ _LPIPS_LOSS = {
     "lambda_lpips": 0.5,
 }
 
+# Combined SSIM + LPIPS: L1 variant (SSIM-style base, smaller LPIPS weight)
+_SSIM_LPIPS_L1_LOSS = {
+    "rgb_loss_type": "l1",
+    "lambda_rgb": 0.8,
+    "lambda_ssim": 0.2,
+    "lambda_lpips": 0.1,
+}
+
+# Combined SSIM + LPIPS: L2 variant (LPIPS-style base with SSIM added)
+_SSIM_LPIPS_L2_LOSS = {
+    "rgb_loss_type": "l2",
+    "lambda_rgb": 1.0,
+    "lambda_ssim": 0.2,
+    "lambda_lpips": 0.5,
+}
+
 
 def _latent_dl3dv_train_preset(num_input_views: int, num_views: int) -> Options:
     return config_defaults["train_dl3dv_base"].evolve(
@@ -444,6 +460,42 @@ config_defaults["eval_volume_latent_6view_lpips"] = Options(
     **_LATENT_D12_ARCH,
     **_LPIPS_LOSS,
 )
+
+# ----- Volume latent-bottleneck finetune / evaluation using combined SSIM + LPIPS loss -----
+for _rgb, _loss in (("l1", _SSIM_LPIPS_L1_LOSS), ("l2", _SSIM_LPIPS_L2_LOSS)):
+    _name = f"finetune_volume_latent_6view_ssim_lpips_{_rgb}"
+    config_doc[_name] = (
+        f"Finetune the released latent-bottleneck DL3DV 6-view model on volume data "
+        f"with {_rgb.upper()} + SSIM + LPIPS loss."
+    )
+    config_defaults[_name] = config_defaults["train_volume_base"].evolve(
+        num_epochs=20,
+        pct_start_steps=400,
+        lr=4e-5,
+        num_gs_tokens=4096,
+        init_tokens_from_existing=True,
+        init_latents_from_existing=True,
+        num_input_views=6,
+        num_views=10,
+        img_size=(256, 256),
+        **_LATENT_D12_ARCH,
+        **_loss,
+    )
+
+    _name = f"eval_volume_latent_6view_ssim_lpips_{_rgb}"
+    config_doc[_name] = "Volume eval preset: 6 views, eval JSON, single batch."
+    config_defaults[_name] = Options(
+        data_mode=(("volume_eval_scaled_0.001", 1),),
+        dataset_kwargs={"evaluation_json": "assets/9.30.nyx.infer.exps/evaluation_idx_volume_3axis_align_6v.json"},
+        num_input_views=6,
+        img_size=(256, 256),
+        evaluating=True,
+        num_gs_tokens=4096,
+        use_input_supervision=False,
+        batch_size=1,
+        **_LATENT_D12_ARCH,
+        **_loss,
+    )
 
 
 # ----- Kubric 4D dynamic finetune -----
