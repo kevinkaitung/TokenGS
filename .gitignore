@@ -31,3 +31,9 @@ data/dl3dv_eval
 # OS / core dumps
 .DS_Store
 core.*
+
+# PBS stdout and stderr logs
+*.pbs.o[0-9]*
+*.pbs.e[0-9]*
+*.sh.o[0-9]*
+*.sh.e[0-9]*
